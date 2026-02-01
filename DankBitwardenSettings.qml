@@ -24,6 +24,14 @@ PluginSettings {
     }
 
     ToggleSetting {
+        id: copyToClipboardToggle
+        settingKey: "copyToClipboard"
+        label: "Copy Password Instead of Typing"
+        description: value ? "Copies passwords with wl-copy" : "Autotypes username and password with wtype"
+        defaultValue: false
+    }
+
+    ToggleSetting {
         id: noTriggerToggle
         settingKey: "noTrigger"
         label: "Always Active"

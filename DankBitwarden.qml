@@ -9,6 +9,7 @@ QtObject {
 
     property var pluginService: null
     property string trigger: ""
+    property bool copyToClipboard: false
     property var _passwords: []
     property string _prevPass: ""
     property bool _loading: false
@@ -20,6 +21,7 @@ QtObject {
         if (!pluginService)
             return;
         trigger = pluginService.loadPluginData("dankBitwarden", "trigger", "[");
+        copyToClipboard = pluginService.loadPluginData("dankBitwarden", "copyToClipboard", false);
         Qt.callLater(loadPasswords);
     }
 
@@ -98,12 +100,21 @@ QtObject {
         }
 
         if (actionType === "type") {
-            Quickshell.execDetached([
-                "sh",
-                "-c",
-                "rbw get --field username '" + item._passId + "' | wtype - && " +
-                "rbw get --field password '" + item._passId + "' | wtype -"
-            ]);
+            if (copyToClipboard) {
+                Quickshell.execDetached([
+                    "sh",
+                    "-c",
+                    "rbw get --field password '" + item._passId + "' | wl-copy"
+                ]);
+                ToastService.showInfo("DankBitwarden", "Copied password for " + item._passName + " to clipboard");
+            } else {
+                Quickshell.execDetached([
+                    "sh",
+                    "-c",
+                    "rbw get --field username '" + item._passId + "' | wtype - && " +
+                    "rbw get --field password '" + item._passId + "' | wtype -"
+                ]);
+            }
         }
     }
 
