@@ -7,6 +7,7 @@ Launcher plugin for DankMaterialShell to search through bitwarden entries with r
 - Configurable default action per entry type (autotype, copy, or type any field)
 - Login autotype pastes username, presses Tab, then pastes password
 - Context menu with Copy/Type for every field on the entry
+- Previous entry sorted to the top
 
 ## Usage
 1. Install and setup `rbw` following [its readme](https://github.com/doy/rbw).

@@ -161,13 +161,19 @@ QtObject {
             return a._passName.localeCompare(b._passName);
         });
 
-        // If length is zero then add sync item to the beginning
-        // so user knows its an option
+        // If length is zero then add sync item so user knows its an option.
+        // Insert it after the MRU entry (if present) so the previously-used
+        // entry stays at the very top.
         if (lowerQuery.length === 0) {
-            results.unshift(syncItem);
+            const insertAt = (results.length > 0 && results[0]._sortKey === 0) ? 1 : 0;
+            results.splice(insertAt, 0, syncItem);
         }
 
-        return results.slice(0, 50);
+        const top = results.slice(0, 50);
+        for (let i = 0; i < top.length; i++) {
+            top[i]._preScored = 100000 - i;
+        }
+        return top;
     }
 
     function executeItem(item) {
