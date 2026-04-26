@@ -9,7 +9,10 @@ QtObject {
 
     property var pluginService: null
     property string trigger: ""
-    property bool copyToClipboard: false
+    property string loginAction: "autotype"
+    property string cardAction: "type:number"
+    property string identityAction: "copy:name"
+    property string sshKeyAction: "copy:public_key"
     property var _passwords: []
     property string _prevPass: ""
     property bool _loading: false
@@ -29,9 +32,27 @@ QtObject {
     Component.onCompleted: {
         if (!pluginService)
             return;
-        trigger = pluginService.loadPluginData("dankBitwarden", "trigger", "[");
-        copyToClipboard = pluginService.loadPluginData("dankBitwarden", "copyToClipboard", false);
+        _reloadSettings();
         Qt.callLater(loadPasswords);
+    }
+
+    function _reloadSettings() {
+        if (!pluginService)
+            return;
+        trigger = pluginService.loadPluginData("dankBitwarden", "trigger", "[");
+        loginAction = pluginService.loadPluginData("dankBitwarden", "loginAction", "autotype");
+        cardAction = pluginService.loadPluginData("dankBitwarden", "cardAction", "type:number");
+        identityAction = pluginService.loadPluginData("dankBitwarden", "identityAction", "copy:name");
+        sshKeyAction = pluginService.loadPluginData("dankBitwarden", "sshKeyAction", "copy:public_key");
+    }
+
+    property var _pluginDataConn: Connections {
+        target: pluginService
+        enabled: pluginService !== null
+        function onPluginDataChanged(changedPluginId) {
+            if (changedPluginId === "dankBitwarden")
+                _reloadSettings();
+        }
     }
 
     function loadPasswords() {
@@ -41,6 +62,26 @@ QtObject {
 
     function _metaFor(type) {
         return _typeMeta[type] || { icon: "material:lock", primary: null, base: [] };
+    }
+
+    function _defaultActionForType(type) {
+        switch (type) {
+            case "Login": return loginAction;
+            case "Card": return cardAction;
+            case "Identity": return identityAction;
+            case "SSH Key": return sshKeyAction;
+            default: return "";
+        }
+    }
+
+    function _autotypeLogin(item) {
+        Quickshell.execDetached([
+            "sh",
+            "-c",
+            "rbw get --field username '" + item._passId + "' | tr -d '\\n' | wtype - && " +
+            "wtype -k Tab && " +
+            "rbw get --field password '" + item._passId + "' | tr -d '\\n' | wtype -"
+        ]);
     }
 
     function _fieldsFor(item) {
@@ -89,7 +130,7 @@ QtObject {
                     name: (pass.folder != null ? pass.folder + "/" : "") + pass.name,
                     icon: meta.icon,
                     comment: pass.user,
-                    action: "type:" + pass.id,
+                    action: "default:" + pass.id,
                     categories: ["Dank Bitwarden"],
                     _passName: pass.name,
                     _passId: pass.id,
@@ -141,25 +182,28 @@ QtObject {
             return;
         }
 
-        if (actionType === "type") {
-            const meta = _metaFor(item._passType);
-            if (item._passType === "Login" && !copyToClipboard) {
-                Quickshell.execDetached([
-                    "sh",
-                    "-c",
-                    "rbw get --field username '" + item._passId + "' | tr -d '\\n' | wtype - && " +
-                    "wtype -k Tab && " +
-                    "rbw get --field password '" + item._passId + "' | tr -d '\\n' | wtype -"
-                ]);
+        if (actionType === "default") {
+            let defaultAction = _defaultActionForType(item._passType);
+            if (!defaultAction) {
+                const primary = _metaFor(item._passType).primary;
+                if (!primary)
+                    return;
+                defaultAction = "type:" + primary;
+            }
+            if (defaultAction === "autotype") {
+                _autotypeLogin(item);
+                _prevPass = item._passId;
                 return;
             }
-            if (!meta.primary)
+            const sep = defaultAction.indexOf(":");
+            if (sep === -1)
                 return;
-            if (copyToClipboard) {
-                copyItemField(item, meta.primary);
-            } else {
-                typeItemField(item, meta.primary);
-            }
+            const mode = defaultAction.substring(0, sep);
+            const field = defaultAction.substring(sep + 1);
+            if (mode === "copy")
+                copyItemField(item, field);
+            else if (mode === "type")
+                typeItemField(item, field);
         }
     }
 
