@@ -14,6 +14,15 @@ QtObject {
     property string _prevPass: ""
     property bool _loading: false
     property int _pendingLoads: 0
+    property var _fieldsCache: ({})
+
+    readonly property var _typeMeta: ({
+        "Login":    { icon: "material:password",    primary: "password",   base: ["username", "password", "totp"] },
+        "Card":     { icon: "material:credit_card", primary: "number",     base: ["cardholder", "number", "cvv", "brand"] },
+        "Identity": { icon: "material:badge",       primary: "name",       base: [] },
+        "Note":     { icon: "material:sticky_note_2", primary: null,       base: [] },
+        "SSH Key":  { icon: "material:key",         primary: "public_key", base: ["public_key", "fingerprint"] }
+    })
 
     signal itemsChanged
 
@@ -27,6 +36,37 @@ QtObject {
 
     function loadPasswords() {
         const process = passwordsProcessComponent.createObject(root);
+        process.running = true;
+    }
+
+    function _metaFor(type) {
+        return _typeMeta[type] || { icon: "material:lock", primary: null, base: [] };
+    }
+
+    function _fieldsFor(item) {
+        const cached = _fieldsCache[item._passId];
+        const base = _metaFor(item._passType).base;
+        if (!cached)
+            return base;
+        const merged = base.slice();
+        for (let i = 0; i < cached.length; i++) {
+            if (merged.indexOf(cached[i]) === -1)
+                merged.push(cached[i]);
+        }
+        return merged;
+    }
+
+    function _humanizeField(f) {
+        const s = f.replace(/_/g, " ");
+        return s.charAt(0).toUpperCase() + s.slice(1);
+    }
+
+    function loadFields(item) {
+        if (!item || !item._passId)
+            return;
+        if (_fieldsCache[item._passId])
+            return;
+        const process = fieldsProcessComponent.createObject(root, { passId: item._passId });
         process.running = true;
     }
 
@@ -44,9 +84,10 @@ QtObject {
             const passLower = pass.name.toLowerCase();
 
             if (lowerQuery.length === 0 || passLower.includes(lowerQuery)) {
+                const meta = _metaFor(pass.type);
                 results.push({
                     name: (pass.folder != null ? pass.folder + "/" : "") + pass.name,
-                    icon: "material:password",
+                    icon: meta.icon,
                     comment: pass.user,
                     action: "type:" + pass.id,
                     categories: ["Dank Bitwarden"],
@@ -54,7 +95,8 @@ QtObject {
                     _passId: pass.id,
                     _passUser: pass.user,
                     _passFolder: pass.folder,
-                    _sortKey: pass.id == _prevPass ? 0 : 1 
+                    _passType: pass.type,
+                    _sortKey: pass.id == _prevPass ? 0 : 1
                 });
             }
         }
@@ -100,15 +142,22 @@ QtObject {
         }
 
         if (actionType === "type") {
-            if (copyToClipboard) {
-                copyItemField(item, "password");
-            } else {
+            const meta = _metaFor(item._passType);
+            if (item._passType === "Login" && !copyToClipboard) {
                 Quickshell.execDetached([
                     "sh",
                     "-c",
                     "rbw get --field username '" + item._passId + "' | wtype - && " +
                     "rbw get --field password '" + item._passId + "' | wtype -"
                 ]);
+                return;
+            }
+            if (!meta.primary)
+                return;
+            if (copyToClipboard) {
+                copyItemField(item, meta.primary);
+            } else {
+                typeItemField(item, meta.primary);
             }
         }
     }
@@ -131,38 +180,28 @@ QtObject {
     function getContextMenuActions(item) {
         if (!item || !item._passId)
             return [];
-        return [
-            {
+        loadFields(item);
+        const fields = _fieldsFor(item);
+        const actions = [];
+        for (let i = 0; i < fields.length; i++) {
+            const f = fields[i];
+            const label = _humanizeField(f);
+            actions.push({
                 icon: "content_copy",
-                text: I18n.tr("Copy Username"),
-                action: () => copyItemField(item, "username")
-            },
-            {
-                icon: "content_copy",
-                text: I18n.tr("Copy Password"),
-                action: () => copyItemField(item, "password")
-            },
-            {
-                icon: "content_copy",
-                text: I18n.tr("Copy TOTP"),
-                action: () => copyItemField(item, "totp")
-            },
-            {
+                text: I18n.tr("Copy ") + label,
+                action: (function(field) { return () => copyItemField(item, field); })(f)
+            });
+        }
+        for (let i = 0; i < fields.length; i++) {
+            const f = fields[i];
+            const label = _humanizeField(f);
+            actions.push({
                 icon: "keyboard",
-                text: I18n.tr("Type Username"),
-                action: () => typeItemField(item, "username")
-            },
-            {
-                icon: "keyboard",
-                text: I18n.tr("Type Password"),
-                action: () => typeItemField(item, "password")
-            },
-            {
-                icon: "keyboard",
-                text: I18n.tr("Type TOTP"),
-                action: () => typeItemField(item, "totp")
-            }
-        ];
+                text: I18n.tr("Type ") + label,
+                action: (function(field) { return () => typeItemField(item, field); })(f)
+            });
+        }
+        return actions;
     }
 
     onTriggerChanged: {
@@ -199,12 +238,38 @@ QtObject {
         
     }
 
+    property Component fieldsProcessComponent: Component {
+        Process {
+            id: fieldsProcess
+            property string passId: ""
+            running: false
+            command: ["rbw", "get", "-l", passId]
+
+            stdout: StdioCollector {
+                onStreamFinished: {
+                    const fields = text.split("\n").map(l => l.trim()).filter(l => l.length > 0);
+                    const cache = root._fieldsCache;
+                    cache[fieldsProcess.passId] = fields;
+                    root._fieldsCache = cache;
+                    fieldsProcess.destroy();
+                }
+            }
+
+            onExited: exitCode => {
+                if (exitCode !== 0) {
+                    console.warn("[DankBitwarden] Failed to load fields for", fieldsProcess.passId, "exit:", exitCode);
+                    fieldsProcess.destroy();
+                }
+            }
+        }
+    }
+
     property Component passwordsProcessComponent: Component {
         Process {
             id: passwordsProcess
 
             running: false
-            command: ["rbw", "list", "--fields", "id,name,user,folder"]
+            command: ["rbw", "list", "--fields", "id,name,user,folder,type"]
 
             stdout: StdioCollector {
                 onStreamFinished: {
@@ -220,13 +285,15 @@ QtObject {
                             const name = parts[1] || "";
                             const user = parts[2] || "";
                             const folder = parts[3] || "";
+                            const type = parts[4] || "";
                             if (!id)
                                 continue;
                             data.push({
-                                id: name,
+                                id: id,
                                 name: name,
                                 user: user,
-                                folder: folder || null
+                                folder: folder || null,
+                                type: type
                             });
                         }
                         root.onPasswordsLoaded(data);
