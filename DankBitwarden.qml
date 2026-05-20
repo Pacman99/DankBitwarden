@@ -3,6 +3,7 @@ import Quickshell
 import Quickshell.Io
 import qs.Common
 import qs.Services
+import "FuzzyMatcher.js" as FuzzyMatcher
 
 QtObject {
     id: root
@@ -122,9 +123,13 @@ QtObject {
 
         for (let i = 0; i < _passwords.length; i++) {
             const pass = _passwords[i];
-            const passLower = pass.name.toLowerCase();
+            const matchScore = FuzzyMatcher.scoreCandidate([
+                pass.name,
+                pass.user,
+                pass.folder
+            ], lowerQuery);
 
-            if (lowerQuery.length === 0 || passLower.includes(lowerQuery)) {
+            if (lowerQuery.length === 0 || matchScore >= 0) {
                 const meta = _metaFor(pass.type);
                 results.push({
                     name: (pass.folder != null ? pass.folder + "/" : "") + pass.name,
@@ -137,7 +142,8 @@ QtObject {
                     _passUser: pass.user,
                     _passFolder: pass.folder,
                     _passType: pass.type,
-                    _sortKey: pass.id == _prevPass ? 0 : 1
+                    _sortKey: pass.id == _prevPass ? 0 : 1,
+                    _fuzzyScore: matchScore
                 });
             }
         }
@@ -151,13 +157,15 @@ QtObject {
         };
 
         // Sync item should be sorted like any other item once typing starts
-         if (lowerQuery.length !== 0 && "sync".includes(lowerQuery)) {
+         if (lowerQuery.length !== 0 && FuzzyMatcher.scoreCandidate(["sync"], lowerQuery) >= 0) {
             results.push(syncItem);
         }
 
         results.sort((a, b) => {
             if (a._sortKey !== b._sortKey)
                 return a._sortKey - b._sortKey;
+            if (lowerQuery.length !== 0 && a._fuzzyScore !== b._fuzzyScore)
+                return a._fuzzyScore - b._fuzzyScore;
             return a._passName.localeCompare(b._passName);
         });
 
