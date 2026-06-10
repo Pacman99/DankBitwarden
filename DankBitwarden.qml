@@ -18,6 +18,7 @@ QtObject {
     property bool _loading: false
     property int _pendingLoads: 0
     property var _fieldsCache: ({})
+    property FuzzyMatcher _fuzzy: FuzzyMatcher {}
 
     readonly property var _typeMeta: ({
         "Login":    { icon: "material:password",    primary: "password",   base: ["username", "password", "totp"] },
@@ -62,6 +63,22 @@ QtObject {
 
     function _metaFor(type) {
         return _typeMeta[type] || { icon: "material:lock", primary: null, base: [] };
+    }
+
+    function _makeItem(pass) {
+        const meta = _metaFor(pass.type);
+        return {
+            name: (pass.folder != null ? pass.folder + "/" : "") + pass.name,
+            icon: meta.icon,
+            comment: pass.user,
+            action: "default:" + pass.id,
+            categories: ["Dank Bitwarden"],
+            _passName: pass.name,
+            _passId: pass.id,
+            _passUser: pass.user,
+            _passFolder: pass.folder,
+            _passType: pass.type
+        };
     }
 
     function _defaultActionForType(type) {
@@ -117,30 +134,9 @@ QtObject {
     }
 
     function getItems(query) {
-        const lowerQuery = query ? query.toLowerCase().trim() : "";
-        let results = [];
-
-        for (let i = 0; i < _passwords.length; i++) {
-            const pass = _passwords[i];
-            const passLower = pass.name.toLowerCase();
-
-            if (lowerQuery.length === 0 || passLower.includes(lowerQuery)) {
-                const meta = _metaFor(pass.type);
-                results.push({
-                    name: (pass.folder != null ? pass.folder + "/" : "") + pass.name,
-                    icon: meta.icon,
-                    comment: pass.user,
-                    action: "default:" + pass.id,
-                    categories: ["Dank Bitwarden"],
-                    _passName: pass.name,
-                    _passId: pass.id,
-                    _passUser: pass.user,
-                    _passFolder: pass.folder,
-                    _passType: pass.type,
-                    _sortKey: pass.id == _prevPass ? 0 : 1
-                });
-            }
-        }
+        // Cap length so a pasted blob can't make the per-keystroke fuzzy scan
+        // do unbounded work over a large vault.
+        const raw = (query ? query.toLowerCase().trim() : "").slice(0, 128);
 
         const syncItem = {
             name: "Sync",
@@ -150,23 +146,50 @@ QtObject {
             _passName: "sync"
         };
 
-        // Sync item should be sorted like any other item once typing starts
-         if (lowerQuery.length !== 0 && "sync".includes(lowerQuery)) {
-            results.push(syncItem);
-        }
+        let results = [];
 
-        results.sort((a, b) => {
-            if (a._sortKey !== b._sortKey)
-                return a._sortKey - b._sortKey;
-            return a._passName.localeCompare(b._passName);
-        });
-
-        // If length is zero then add sync item so user knows its an option.
-        // Insert it after the MRU entry (if present) so the previously-used
-        // entry stays at the very top.
-        if (lowerQuery.length === 0) {
+        if (raw.length === 0) {
+            for (let i = 0; i < _passwords.length; i++) {
+                const pass = _passwords[i];
+                const item = _makeItem(pass);
+                item._sortKey = pass.id == _prevPass ? 0 : 1;
+                results.push(item);
+            }
+            results.sort((a, b) => {
+                if (a._sortKey !== b._sortKey)
+                    return a._sortKey - b._sortKey;
+                return a._passName.localeCompare(b._passName);
+            });
+            // Keep the previously-used entry at the very top; sync sits just below it.
             const insertAt = (results.length > 0 && results[0]._sortKey === 0) ? 1 : 0;
             results.splice(insertAt, 0, syncItem);
+        } else {
+            // Fuzzy multi-token match across name, username and folder.
+            const tokens = raw.split(/\s+/).filter(t => t.length > 0);
+            for (let i = 0; i < _passwords.length; i++) {
+                const pass = _passwords[i];
+                const score = _fuzzy.matchAll(tokens, pass._search);
+                if (score === null)
+                    continue;
+                const item = _makeItem(pass);
+                item._score = score;
+                item._mru = pass.id == _prevPass;
+                results.push(item);
+            }
+            const syncScore = _fuzzy.matchAll(tokens, "sync");
+            if (syncScore !== null) {
+                syncItem._score = syncScore;
+                syncItem._mru = false;
+                results.push(syncItem);
+            }
+            // Rank by match quality; previously-used entry wins ties.
+            results.sort((a, b) => {
+                if (b._score !== a._score)
+                    return b._score - a._score;
+                if (a._mru !== b._mru)
+                    return a._mru ? -1 : 1;
+                return a._passName.localeCompare(b._passName);
+            });
         }
 
         const top = results.slice(0, 50);
@@ -263,6 +286,10 @@ QtObject {
     function onPasswordsLoaded(data) {
         if (!data?.length)
             return;
+        for (let i = 0; i < data.length; i++) {
+            const p = data[i];
+            p._search = (p.name + " " + (p.user || "") + " " + (p.folder || "")).toLowerCase();
+        }
         _passwords = data;
 
         _pendingLoads--;
